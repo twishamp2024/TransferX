@@ -1,0 +1,202 @@
+name: Release and Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish-packages:
+    name: Publish Maven Packages to GitHub Packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Publish to GitHub Packages
+        run: ./gradlew publish --no-daemon
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows:
+    name: Build Windows Desktop & CLI
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Windows Installers and CLI
+        run: |
+          .\gradlew.bat :desktopApp:packageMsi :desktopApp:packageUberJarForCurrentOS :cli:distZip :cli:distTar --no-daemon
+
+      - name: Prepare Windows Assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts-windows
+          Get-ChildItem -Recurse -Path desktopApp\build\compose\binaries\main\msi\*.msi | Copy-Item -Destination artifacts-windows\
+          Get-ChildItem -Recurse -Path desktopApp\build\compose\jars\*.jar | Copy-Item -Destination artifacts-windows\
+          Get-ChildItem -Recurse -Path cli\build\distributions\* -Include *.zip,*.tar | Copy-Item -Destination artifacts-windows\
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-assets
+          path: artifacts-windows/*
+
+  build-linux:
+    name: Build Linux Desktop (Deb)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Debian Packaging Tools
+        run: sudo apt-get update && sudo apt-get install -y fakeroot
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Linux Deb and UberJar
+        run: ./gradlew :desktopApp:packageDeb :desktopApp:packageUberJarForCurrentOS --no-daemon
+
+      - name: Prepare Linux Assets
+        run: |
+          mkdir -p artifacts-linux
+          find desktopApp/build/compose/binaries/main/deb -name "*.deb" -exec cp {} artifacts-linux/ \; 2>/dev/null || true
+          find desktopApp/build/compose/jars -name "*.jar" -exec cp {} artifacts-linux/ \; 2>/dev/null || true
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-assets
+          path: artifacts-linux/*
+
+  build-macos:
+    name: Build macOS Desktop (DMG)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build macOS DMG and UberJar
+        run: ./gradlew :desktopApp:packageDmg :desktopApp:packageUberJarForCurrentOS --no-daemon
+
+      - name: Prepare macOS Assets
+        run: |
+          mkdir -p artifacts-macos
+          find desktopApp/build/compose/binaries/main/dmg -name "*.dmg" -exec cp {} artifacts-macos/ \; 2>/dev/null || true
+          find desktopApp/build/compose/jars -name "*.jar" -exec cp {} artifacts-macos/ \; 2>/dev/null || true
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-assets
+          path: artifacts-macos/*
+
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build Android Debug APK
+        run: ./gradlew :androidApp:assembleDebug --no-daemon
+
+      - name: Prepare Android Assets
+        run: |
+          mkdir -p artifacts-android
+          find androidApp/build/outputs/apk/debug -name "*.apk" -exec cp {} artifacts-android/TransferX-android.apk \;
+
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-assets
+          path: artifacts-android/*
+
+  create-release:
+    name: Publish GitHub Release
+    needs: [publish-packages, build-windows, build-linux, build-macos, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-assets
+
+      - name: Flatten assets directory
+        run: |
+          mkdir -p release-files
+          find all-assets -type f -exec cp {} release-files/ \;
+          ls -la release-files/
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          name: Release ${{ github.event.inputs.tag_name || github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
