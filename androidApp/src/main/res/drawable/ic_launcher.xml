@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Original TransferX mark: two opposing arrows in a rounded teal square. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:fillColor="#0B7A75"
+        android:pathData="M14,2 L50,2 Q62,2 62,14 L62,50 Q62,62 50,62 L14,62 Q2,62 2,50 L2,14 Q2,2 14,2 Z" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M16,24 L46,24 M38,16 L46,24 L38,32 M48,40 L18,40 M26,32 L18,40 L26,48" />
+</vector>
