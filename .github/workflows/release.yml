@@ -32,6 +32,9 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
       - name: Publish to GitHub Packages
         run: ./gradlew publish --no-daemon
         env:
@@ -91,6 +94,9 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
       - name: Build Linux Deb and UberJar
         run: ./gradlew :desktopApp:packageDeb :desktopApp:packageUberJarForCurrentOS --no-daemon
 
@@ -122,6 +128,9 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
       - name: Build macOS DMG and UberJar
         run: ./gradlew :desktopApp:packageDmg :desktopApp:packageUberJarForCurrentOS --no-daemon
 
@@ -152,9 +161,14 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
 
       - name: Build Android Debug APK
         run: ./gradlew :androidApp:assembleDebug --no-daemon
