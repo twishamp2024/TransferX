@@ -86,7 +86,9 @@ jobs:
             dpkg-deb --info "$deb"
 
             echo "--- dpkg-deb contents sample for $(basename "$deb") ---"
-            dpkg-deb --contents "$deb" | head -n 30
+            dpkg-deb --contents "$deb" > /tmp/deb-contents.txt
+            head -n 30 /tmp/deb-contents.txt
+            rm -f /tmp/deb-contents.txt
 
             cp "$deb" artifacts-linux/
           done
@@ -118,10 +120,12 @@ jobs:
             unzip -t "$jar" > /dev/null || { echo "::error::Corrupted JAR archive: $jar"; exit 1; }
 
             echo "--- Verifying desktop application entry point ---"
-            if ! unzip -l "$jar" | grep -q "com/transferx/desktop/MainKt.class"; then
+            unzip -l "$jar" > /tmp/jar-contents.txt
+            if ! grep -q "com/transferx/desktop/MainKt.class" /tmp/jar-contents.txt; then
               echo "::error::Entry point class com/transferx/desktop/MainKt.class missing from $jar"
               exit 1
             fi
+            rm -f /tmp/jar-contents.txt
             echo "Entry point class com/transferx/desktop/MainKt.class verified."
 
             cp "$jar" artifacts-linux/
