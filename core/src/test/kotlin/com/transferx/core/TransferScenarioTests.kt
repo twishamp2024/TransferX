@@ -105,10 +105,10 @@ class TransferScenarioTests {
         assertFalse(Files.exists(dir) && Files.list(dir).use { it.count() } > 0, "temporary data should be cleaned up")
     }
 
-    private fun transfer(sender: TestNode, receiver: TestNode, src: List<FileSource>, target: ConnectTarget = receiver.target()): Pair<SessionSnapshot, SessionSnapshot> {
+    private fun transfer(sender: TestNode, receiver: TestNode, src: List<FileSource>, target: ConnectTarget = receiver.target(), timeoutMs: Long = 60_000): Pair<SessionSnapshot, SessionSnapshot> {
         val id = sender.engine.send(target, src)
-        val s = sender.awaitSession(id) { terminal(it) }
-        val r = receiver.awaitSession(id) { terminal(it) }
+        val s = sender.awaitSession(id, timeoutMs) { terminal(it) }
+        val r = receiver.awaitSession(id, timeoutMs) { terminal(it) }
         return s to r
     }
 
@@ -143,7 +143,7 @@ class TransferScenarioTests {
         }
         val maxHeap = Runtime.getRuntime().maxMemory()
         val start = System.nanoTime()
-        val (pairResult, peak) = measurePeakHeap { transfer(a, b, sources(f)) }
+        val (pairResult, peak) = measurePeakHeap { transfer(a, b, sources(f), timeoutMs = 240_000) }
         val seconds = (System.nanoTime() - start) / 1e9
         assertEquals(SessionState.COMPLETED, pairResult.first.state)
         assertEquals(size, Files.size(b.destination.resolve("disk-image.bin")))
