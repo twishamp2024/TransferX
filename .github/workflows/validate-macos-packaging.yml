@@ -1,0 +1,185 @@
+name: Validate macOS Packaging
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag, or commit SHA to build and validate'
+        required: false
+        default: 'fix/ci-cd-pipeline'
+        type: string
+  push:
+    branches:
+      - 'validate/macos-packaging'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-macos-packaging:
+    name: Validate macOS DMG and Uber JAR Packaging
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Record environment and checkout details
+        run: |
+          echo "=== Environment and Checkout Information ==="
+          echo "Checked-out Commit SHA: $(git rev-parse HEAD)"
+          echo "Commit subject: $(git log -1 --pretty=%s)"
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Runner Architecture: ${{ runner.arch }}"
+          echo "System Architecture (uname -m): $(uname -m)"
+          echo "Kernel / OS Info: $(uname -a)"
+          echo "macOS Product Name: $(sw_vers -productName 2>/dev/null || echo 'macOS')"
+          echo "macOS Product Version: $(sw_vers -productVersion)"
+          echo "macOS Build Version: $(sw_vers -buildVersion)"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Build macOS DMG and UberJar
+        run: ./gradlew :desktopApp:packageDmg :desktopApp:packageUberJarForCurrentOS --no-daemon
+
+      - name: Validate and Stage Artifacts
+        run: |
+          set -euo pipefail
+
+          mkdir -p artifacts-macos
+
+          get_file_size() {
+            if stat -f%z "$1" >/dev/null 2>&1; then
+              stat -f%z "$1"
+            else
+              wc -c < "$1" | tr -d ' '
+            fi
+          }
+
+          get_sha256() {
+            if command -v shasum >/dev/null 2>&1; then
+              shasum -a 256 "$1" | awk '{print $1}'
+            elif command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1" | awk '{print $1}'
+            else
+              openssl dgst -sha256 "$1" | awk '{print $NF}'
+            fi
+          }
+
+          echo "=== 1. Validating macOS Disk Image (.dmg) ==="
+          DMG_DIR="desktopApp/build/compose/binaries/main/dmg"
+          if [ ! -d "$DMG_DIR" ]; then
+            DMG_DIR="desktopApp/build/compose/binaries"
+          fi
+
+          if [ ! -d "$DMG_DIR" ]; then
+            echo "::error::Expected DMG output directory does not exist."
+            exit 1
+          fi
+
+          DMG_COUNT=$(find "$DMG_DIR" -type f -name "*.dmg" | wc -l | tr -d ' ')
+          if [ "$DMG_COUNT" -eq 0 ]; then
+            echo "::error::No .dmg packages found under '$DMG_DIR'."
+            exit 1
+          fi
+
+          for dmg in $(find "$DMG_DIR" -type f -name "*.dmg"); do
+            [ -f "$dmg" ] || continue
+            if [ ! -s "$dmg" ]; then
+              echo "::error::DMG package '$dmg' is empty (0 bytes)."
+              exit 1
+            fi
+
+            DMG_SIZE=$(get_file_size "$dmg")
+            echo "DMG package found: $(basename "$dmg") ($DMG_SIZE bytes)"
+
+            echo "--- File inspection for $(basename "$dmg") ---"
+            file "$dmg"
+
+            echo "--- Disk image information (hdiutil) ---"
+            if command -v hdiutil >/dev/null 2>&1; then
+              hdiutil imageinfo "$dmg" | head -n 30 || true
+            fi
+
+            echo "--- Code signing status check ---"
+            if command -v codesign >/dev/null 2>&1; then
+              echo "Checking codesign status (non-release unsigned artifact is expected):"
+              codesign -dv --verbose=4 "$dmg" 2>&1 || true
+            fi
+
+            cp "$dmg" artifacts-macos/
+          done
+
+          echo "=== 2. Validating Uber JAR (.jar) ==="
+          JAR_DIR="desktopApp/build/compose/jars"
+          if [ ! -d "$JAR_DIR" ]; then
+            JAR_DIR="desktopApp/build"
+          fi
+
+          JAR_COUNT=$(find "$JAR_DIR" -type f -name "*.jar" | wc -l | tr -d ' ')
+          if [ "$JAR_COUNT" -eq 0 ]; then
+            echo "::warning::No .jar files found in '$JAR_DIR'."
+          else
+            for jar in $(find "$JAR_DIR" -type f -name "*.jar"); do
+              [ -f "$jar" ] || continue
+              if [ ! -s "$jar" ]; then
+                echo "::error::Uber JAR '$jar' is empty (0 bytes)."
+                exit 1
+              fi
+
+              JAR_SIZE=$(get_file_size "$jar")
+              echo "Uber JAR found: $(basename "$jar") ($JAR_SIZE bytes)"
+
+              echo "--- Verifying ZIP/JAR archive integrity ---"
+              unzip -t "$jar" > /dev/null || { echo "::error::Corrupted JAR archive: $jar"; exit 1; }
+
+              echo "--- Verifying desktop application entry point ---"
+              if ! unzip -l "$jar" | grep -q "com/transferx/desktop/MainKt.class"; then
+                echo "::error::Entry point class com/transferx/desktop/MainKt.class missing from $jar"
+                exit 1
+              fi
+              echo "Entry point class com/transferx/desktop/MainKt.class verified."
+
+              cp "$jar" artifacts-macos/
+            done
+          fi
+
+          echo "=== 3. Validating Staging Directory ==="
+          if [ -z "$(ls -A artifacts-macos 2>/dev/null)" ]; then
+            echo "::error::Upload preparation directory 'artifacts-macos' is empty."
+            exit 1
+          fi
+
+          STAGED_COUNT=$(ls -1 artifacts-macos | wc -l | tr -d ' ')
+          echo "Total staged artifacts: $STAGED_COUNT"
+          if [ "$STAGED_COUNT" -lt 1 ]; then
+            echo "::error::Expected at least 1 artifact (.dmg), but found only $STAGED_COUNT."
+            exit 1
+          fi
+
+          echo "=== 4. Staged Artifact Filenames, Sizes, and SHA-256 ==="
+          for file in artifacts-macos/*; do
+            [ -f "$file" ] || continue
+            BYTES=$(get_file_size "$file")
+            HUMAN=$(ls -lh "$file" | awk '{print $5}')
+            SHA=$(get_sha256 "$file")
+            echo "Artifact: $(basename "$file") | Size: $BYTES bytes ($HUMAN) | SHA-256: $SHA"
+          done
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-desktop-packaging
+          path: artifacts-macos/*
+          if-no-files-found: error
